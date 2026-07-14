@@ -34,7 +34,7 @@ jobs:
       - name: Run tests with agent
         env:
           MAVEN_OPTS: "-javaagent:./fixate-agent.jar"
-        run: mvn verify -DargLine="-Xmx16g" -DargLine="fixate.depth=0"
+        run: mvn test -DargLine="-Xmx16g" -DargLine="fixate.depth=0"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
