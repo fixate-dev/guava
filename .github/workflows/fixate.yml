@@ -31,6 +31,9 @@ jobs:
             -fL "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}-bootstrap.jar" \
             -o fixate-agent-bootstrap.jar
 
+      - name : install guava
+        run: mvn install -DskipTests
+
       - name: Run tests with agent
         env:
           MAVEN_OPTS: "-javaagent:./fixate-agent.jar"
