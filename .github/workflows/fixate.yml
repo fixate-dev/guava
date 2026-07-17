@@ -21,23 +21,26 @@ jobs:
         env:
           AGENT_VERSION: "${{ vars.FIXATE_AGENT_VERSION }}"
         run: |
-          # Download Fixate agent
-          curl -u "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
+          if [ -z "$AGENT_VERSION" ]; then
+            echo "::error::FIXATE_AGENT_VERSION is not set"
+            exit 1
+          fi
+
+          curl -fu "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
             -L "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}.jar" \
             -o fixate-agent.jar
 
-          # Download bootstrap jar
-          curl -u "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
+          curl -fu "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
             -fL "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}-bootstrap.jar" \
             -o fixate-agent-bootstrap.jar
 
-      # - name : install guava
-      #   run: mvn install -DskipTests
+      - name: Install guava module to local repository
+        run: ./mvnw install -pl guava -DskipTests
 
       - name: Run tests with agent
         env:
-          MAVEN_OPTS: "-javaagent:./fixate-agent.jar"
-        run: ./mvnw test -DargLine="-Xmx16g fixate.depth=0"
+          MAVEN_OPTS: "-javaagent:./fixate-agent.jar -Xmx16g"
+        run: ./mvnw test -pl guava-testlib -DargLine="-Dfixate.depth=0"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
