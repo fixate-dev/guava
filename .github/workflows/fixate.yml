@@ -11,11 +11,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Set up JDKs
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
-          distribution: "zulu"
+          java-version: |
+            17
+            26
+          distribution: 'temurin'
+          cache: 'maven'
 
       - name: Download agent jars from GitHub Packages
         env:
@@ -34,13 +37,11 @@ jobs:
             -fL "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}-bootstrap.jar" \
             -o fixate-agent-bootstrap.jar
 
-      - name: Install guava module to local repository
-        run: ./mvnw install -pl guava -DskipTests
+      - name: Install
+        run: ./mvnw -B -ntp -Dtoolchain.skip install -U -DskipTests=true
 
       - name: Run tests with agent
-        env:
-          MAVEN_OPTS: "-javaagent:./fixate-agent.jar -Xmx16g"
-        run: ./mvnw test -pl guava-testlib -DargLine="-Dfixate.depth=0"
+        run: ./mvnw -B -ntp -Dtoolchain.skip test -Dsurefire.toolchain.version=17 -DargLine="-javaagent:./fixate-agent.jar -Xmx16g -Dfixate.depth=0"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
