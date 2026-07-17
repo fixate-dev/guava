@@ -31,13 +31,13 @@ jobs:
             -fL "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}-bootstrap.jar" \
             -o fixate-agent-bootstrap.jar
 
-      - name : install guava
-        run: mvn install -DskipTests
+      # - name : install guava
+      #   run: mvn install -DskipTests
 
       - name: Run tests with agent
         env:
           MAVEN_OPTS: "-javaagent:./fixate-agent.jar"
-        run: mvn test -DargLine="-Xmx16g" -DargLine="fixate.depth=0"
+        run: ./mvnw test -DargLine="-Xmx16g" -DargLine="fixate.depth=0"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
