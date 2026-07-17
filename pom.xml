@@ -386,7 +386,7 @@
             <runOrder>alphabetical</runOrder>
             <!-- Set max heap for tests. -->
             <!-- Catch dependencies on the default locale by setting it to hi-IN. -->
-            <argLine>-Xmx1536M -Duser.language=hi -Duser.country=IN ${test.add.opens} -javaagent:/home/kirkm/fixate/Fixate/target/fixate-agent.jar</argLine>
+            <!-- <argLine>-Xmx1536M -Duser.language=hi -Duser.country=IN ${test.add.opens} -javaagent:/home/kirkm/fixate/Fixate/target/fixate-agent.jar</argLine> -->
           </configuration>
         </plugin>
         <plugin>
