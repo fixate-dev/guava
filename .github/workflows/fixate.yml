@@ -41,8 +41,10 @@ jobs:
         run: ./mvnw -B -ntp -Dtoolchain.skip install -U -DskipTests=true
 
       - name: Run tests with agent
-        run: ./mvnw -B -ntp -Dtoolchain.skip test -Dsurefire.toolchain.version=17 -DargLine="-javaagent:${{ github.workspace }}/fixate-agent.jar -Xmx16g -Dfixate.depth=0 --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/sun.security.jca=ALL-UNNAMED"
-
+        env:
+          MAVEN_OPTS: "-javaagent:${{ github.workspace }}/fixate-agent.jar -Xmx16g --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/sun.security.jca=ALL-UNNAMED"
+        run: ./mvnw -B -ntp -Dtoolchain.skip test -Dsurefire.toolchain.version=17 -Dfixate.depth=0
+        
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
