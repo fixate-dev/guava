@@ -1,14 +1,34 @@
-name: Run Test with Agent
+name: Fixate analysis
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  FIXATE_AGENT_JAR: ${{ github.workspace }}/.fixate/fixate-agent.jar
+  FIXATE_CONFIG: ${{ github.workspace }}/fixate.yml
+  FIXATE_VERSION: ${{ vars.FIXATE_AGENT_VERSION }}
+
 jobs:
-  test:
+  analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up JDKs
@@ -17,37 +37,169 @@ jobs:
           java-version: |
             17
             26
-          distribution: 'temurin'
-          cache: 'maven'
+          distribution: temurin
+          cache: maven
 
-      - name: Download agent jars from GitHub Packages
+      - name: Download Fixate2 packages
         env:
-          AGENT_VERSION: "1.3"
+          PACKAGE_TOKEN: ${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}
         run: |
-          if [ -z "$AGENT_VERSION" ]; then
-            echo "::error::FIXATE_AGENT_VERSION is not set"
+          test -n "$FIXATE_VERSION" || {
+            echo "FIXATE_AGENT_VERSION repository or organization variable is not set" >&2
+            exit 1
+          }
+          test -n "$PACKAGE_TOKEN" || {
+            echo "FIXATE_PACKAGES_ACCESS_TOKEN secret is not set" >&2
+            exit 1
+          }
+
+          mkdir -p .fixate
+          base="https://maven.pkg.github.com/fixate-dev/Fixate2/dev/fixate"
+          curl -fsSL -u "${{ github.actor }}:$PACKAGE_TOKEN" \
+            -o .fixate/fixate-agent.jar \
+            "$base/fixate-agent/$FIXATE_VERSION/fixate-agent-$FIXATE_VERSION.jar"
+          curl -fsSL -u "${{ github.actor }}:$PACKAGE_TOKEN" \
+            -o .fixate/fixate-agent-bootstrap.jar \
+            "$base/fixate-agent/$FIXATE_VERSION/fixate-agent-$FIXATE_VERSION-bootstrap.jar"
+          curl -fsSL -u "${{ github.actor }}:$PACKAGE_TOKEN" \
+            -o .fixate/fixate-server.jar \
+            "$base/fixate-server/$FIXATE_VERSION/fixate-server-$FIXATE_VERSION.jar"
+
+          jar tf .fixate/fixate-agent.jar > .fixate/agent-contents.txt
+          jar tf .fixate/fixate-agent-bootstrap.jar > .fixate/bootstrap-contents.txt
+          jar tf .fixate/fixate-server.jar > .fixate/server-contents.txt
+          grep -Fxq 'dev/fixate/agent/FixateAgent.class' .fixate/agent-contents.txt
+          grep -Fxq 'dev/fixate/bootstrap/FixateTrackerExternal.class' \
+            .fixate/bootstrap-contents.txt
+          grep -Fxq 'dev/fixate/server/FixateServer.class' .fixate/server-contents.txt
+
+      - name: Start Fixate analyzer
+        run: |
+          nohup java -Xmx1200m -jar .fixate/fixate-server.jar \
+            > fixate-server.log 2>&1 &
+          echo "$!" > .fixate/server.pid
+
+          for _ in $(seq 1 30); do
+            if grep -q 'Consuming Redis stream' fixate-server.log; then
+              cat fixate-server.log
+              exit 0
+            fi
+            if ! kill -0 "$(cat .fixate/server.pid)" 2>/dev/null; then
+              cat fixate-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cat fixate-server.log
+          echo "Fixate analyzer did not become ready" >&2
+          exit 1
+
+      - name: Install Guava without tests
+        run: ./mvnw -B -ntp -Dtoolchain.skip install -U -DskipTests=true
+
+      - name: Run Guava tests with Fixate
+        run: |
+          ./mvnw -B -ntp -Dtoolchain.skip test \
+            -Dsurefire.toolchain.version=17 \
+            -DargLine="-Xmx16g --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.security.jca=ALL-UNNAMED -javaagent:$FIXATE_AGENT_JAR -Dfixate.config=$FIXATE_CONFIG"
+
+      - name: Drain events and finalize reports
+        if: always()
+        run: |
+          if [ ! -f .fixate/server.pid ]; then
+            echo "Fixate analyzer was not started"
             exit 1
           fi
 
-          curl -fu "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
-            -L "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}.jar" \
-            -o fixate-agent.jar
+          redis_container="${{ job.services.redis.id }}"
+          drained=false
+          for _ in $(seq 1 120); do
+            stream_length=$(docker exec "$redis_container" \
+              redis-cli --raw XLEN fixate:events)
+            pending=$(docker exec "$redis_container" \
+              redis-cli --raw XPENDING fixate:events fixate-analyzer \
+              | sed -n '1p')
+            if [ "$stream_length" = "0" ] && [ "${pending:-0}" = "0" ]; then
+              drained=true
+              break
+            fi
+            sleep 2
+          done
 
-          curl -fu "${{ github.repository_owner }}:${{ secrets.FIXATE_PACKAGES_ACCESS_TOKEN }}" \
-            -fL "https://maven.pkg.github.com/fixate-dev/Fixate/com/example/fixate-agent/${AGENT_VERSION}/fixate-agent-${AGENT_VERSION}-bootstrap.jar" \
-            -o fixate-agent-bootstrap.jar
+          if [ "$drained" != true ]; then
+            echo "Fixate events did not drain before shutdown" >&2
+          fi
 
-      - name: Install
-        run: ./mvnw -B -ntp -Dtoolchain.skip install -U -DskipTests=true
+          server_pid=$(cat .fixate/server.pid)
+          if kill -0 "$server_pid" 2>/dev/null; then
+            kill -TERM "$server_pid"
+          fi
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
 
-      - name: Run tests with agent
-        env:
-          MAVEN_OPTS: "-javaagent:${{ github.workspace }}/fixate-agent.jar -Xmx16g --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/sun.security.jca=ALL-UNNAMED"
-        run: ./mvnw -B -ntp -Dtoolchain.skip test -Dsurefire.toolchain.version=17 -Dfixate.depth=0
-        
-      - name: Upload test results
+          tail -100 fixate-server.log
+          test "$drained" = true
+          ! kill -0 "$server_pid" 2>/dev/null
+          grep -Eq 'agent JVMs started=[1-9][0-9]*' fixate-server.log
+          grep -q 'still active=0' fixate-server.log
+          test -s fixate-report.json
+          test -s fixate.sarif
+          python3 - <<'PY'
+          import json
+
+          with open("fixate-report.json", encoding="utf-8") as report_file:
+              report = json.load(report_file)
+          if report["summary"]["tests"] < 1:
+              raise SystemExit("Fixate did not analyze any recognized tests")
+          PY
+
+      - name: Add Fixate summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+
+          try:
+              with open("fixate-report.json", encoding="utf-8") as report_file:
+                  report = json.load(report_file)
+          except Exception as exc:
+              print(f"## Fixate analysis\n\nNo report was produced: {exc}")
+              raise SystemExit(0)
+
+          summary = report["summary"]
+          wasted = summary["totalWastedNanos"]
+          if wasted >= 1_000_000_000:
+              formatted = f"{wasted / 1_000_000_000:.2f} s"
+          elif wasted >= 1_000_000:
+              formatted = f"{wasted / 1_000_000:.2f} ms"
+          elif wasted >= 1_000:
+              formatted = f"{wasted / 1_000:.2f} us"
+          else:
+              formatted = f"{wasted} ns"
+
+          print("## Fixate analysis\n")
+          print(
+              f"**{summary['fixturesWasted']} of {summary['fixturesCreated']} fixtures "
+              f"were wasted ({summary['wastePercentage']}%).**"
+          )
+          print(f"\nTotal wasted setup time: **{formatted}**.")
+          print(f"\nFindings: **{len(report['findings'])}**; "
+                f"analyzed tests: **{summary['tests']}**; "
+                f"truncated tests: **{summary['truncatedTests']}**.")
+          PY
+
+      - name: Upload Fixate reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
-          path: ./reports/
+          name: fixate-report
+          path: |
+            fixate.yml
+            fixate-report.json
+            fixate.sarif
+            fixate-server.log
+          if-no-files-found: warn
+          retention-days: 7

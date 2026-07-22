@@ -1,0 +1,36 @@
+schemaVersion: 1
+
+agent:
+  instrumentation:
+    includePackages:
+      - "com.google.common"
+      - "com.google.thirdparty.publicsuffix"
+    excludePackages:
+      - "com.google.common.truth"
+
+  sampling:
+    strategy: first
+    maxExecutionsPerTestMethod: 100
+
+  limits:
+    maxFixturesPerExecution: 10000
+    eventBufferSize: 10000
+
+redis:
+  host: localhost
+  port: 6379
+  stream: fixate:events
+  publisherBatchSize: 1000
+  consumerBatchSize: 1000
+  blockMillis: 1000
+  retainEvents: false
+
+fixtures:
+  include:
+    - "com.google.common"
+    - "com.google.thirdparty.publicsuffix"
+  exclude: []
+
+report:
+  jsonPath: fixate-report.json
+  sarifPath: fixate.sarif
